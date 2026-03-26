@@ -8,77 +8,23 @@ use bevy::render::render_resource::{Extent3d, TextureDimension, TextureFormat, T
 use bevy::window::ExitCondition;
 use bevy::winit::WinitPlugin;
 use bytes::Bytes;
-use crossfire::{MRx, MTx, mpmc};
-use std::thread;
+use crossfire::{MTx, mpmc};
+use std::collections::VecDeque;
 use std::time::Duration;
 
 use crate::Frame;
 
 const WIDTH: u32 = 1920;
 const HEIGHT: u32 = 1080;
-const FPS: u32 = 60 * 1;
+const TARGET_FPS: f64 = 60.0;
 
 #[derive(Resource, Clone)]
 struct FrameSender(MTx<mpmc::Array<Frame>>);
 
-#[derive(Resource)]
-struct FrameTimer(std::time::Instant);
-
-#[derive(Resource)]
-struct LastFrameTime(std::time::Instant);
+#[derive(Resource, Default)]
+struct FrameTimeQueue(VecDeque<(chrono::DateTime<chrono::Utc>, Duration)>);
 
 pub fn bevy_app(rawstream_tx: MTx<mpmc::Array<Frame>>) {
-    // let (tx, rx) = mpmc::bounded_async::<Bytes>(10);
-
-    // let bevy_tx: MTx<mpmc::Array<Bytes>> = tx.into_blocking();
-    // let thread_rx: MRx<mpmc::Array<Bytes>> = rx.into_blocking();
-
-    // let encoder_handle = thread::spawn(move || {
-    //     let mut total_frames = 0;
-    //     let mut fps_counter = 0;
-    //     let mut last_time = std::time::Instant::now();
-
-    //     while let Ok(bytes_data) = thread_rx.recv() {
-    //         total_frames += 1;
-    //         fps_counter += 1;
-
-    //         let elapsed = last_time.elapsed();
-    //         if elapsed.as_secs_f32() >= 1.0 {
-    //             let actual_fps = fps_counter as f32 / elapsed.as_secs_f32();
-
-    //             tracing::info!(
-    //                 "bevy stats: Total Frames: {} | Size: {}x{} ({:.2} MB) | Actual FPS: {:.2}",
-    //                 total_frames,
-    //                 WIDTH,
-    //                 HEIGHT,
-    //                 (bytes_data.len() as f64) / 1024.0 / 1024.0,
-    //                 actual_fps
-    //             );
-
-    //             fps_counter = 0;
-    //             last_time = std::time::Instant::now();
-    //         }
-
-    //         let frame = Frame {
-    //             data: bytes_data,
-    //             dur: Duration::from_secs_f64(1.0 / FPS as f64),
-    //             ts: chrono::Utc::now(),
-    //         };
-
-    //         if let Err(e) = rawstream_tx.try_send(frame) {
-    //             match e {
-    //                 crossfire::TrySendError::Full(_) => {
-    //                     tracing::warn!("bevy: rawstream_tx buffer is full");
-    //                 }
-    //                 crossfire::TrySendError::Disconnected(_) => {
-    //                     tracing::warn!("bevy: rawstream_tx is closed");
-    //                     return;
-    //                 }
-    //             }
-    //         }
-    //     }
-    // });
-
     let mut app = App::new();
 
     app.add_plugins(
@@ -91,23 +37,15 @@ pub fn bevy_app(rawstream_tx: MTx<mpmc::Array<Frame>>) {
             .disable::<LogPlugin>()
             .disable::<WinitPlugin>(),
     )
-    // .add_plugins(ScheduleRunnerPlugin::run_loop(Duration::from_secs_f64(
-    //     1.0 / FPS as f64,
-    //     // 0.0,
-    // )))
-    .add_plugins(ScheduleRunnerPlugin::run_loop(Duration::ZERO))
-    // or Time<Real>?
-    .insert_resource(Time::<Fixed>::from_hz(FPS as f64))
+    .add_plugins(ScheduleRunnerPlugin::run_loop(Duration::from_secs_f64(
+        1.0 / TARGET_FPS,
+    )))
     .insert_resource(FrameSender(rawstream_tx))
-    .insert_resource(FrameTimer(std::time::Instant::now()))
-    .insert_resource(LastFrameTime(std::time::Instant::now()))
+    .init_resource::<FrameTimeQueue>()
     .add_systems(Startup, setup)
-    .add_systems(Update, rotate_cube)
-    .add_systems(Update, update_time_text)
-    .add_systems(Last, frame_limiter);
+    .add_systems(Update, (record_frame_time, rotate_cube, update_time_text));
 
     app.run();
-    // let _ = encoder_handle.join();
 }
 
 #[derive(Component)]
@@ -115,6 +53,10 @@ struct RotatingCube;
 
 #[derive(Component)]
 struct TimeText;
+
+fn record_frame_time(mut queue: ResMut<FrameTimeQueue>, time: Res<Time>) {
+    queue.0.push_back((chrono::Utc::now(), time.delta()));
+}
 
 fn setup(
     mut commands: Commands,
@@ -182,17 +124,18 @@ fn setup(
         .observe(
             |trigger: On<ReadbackComplete>,
              sender: Res<FrameSender>,
-             mut last_time: ResMut<LastFrameTime>,
+             mut queue: ResMut<FrameTimeQueue>,
              mut exit: MessageWriter<AppExit>| {
-                let now = std::time::Instant::now();
-                let actual_duration = now.duration_since(last_time.0);
-                last_time.0 = now;
+                let (ts, dur) = queue.0.pop_front().unwrap_or_else(|| {
+                    tracing::warn!("Readback 队列与时间戳队列不匹配！");
+                    (
+                        chrono::Utc::now(),
+                        Duration::from_secs_f64(1.0 / TARGET_FPS),
+                    )
+                });
+
                 let data = Bytes::copy_from_slice(&trigger.data);
-                let frame = Frame {
-                    data,
-                    dur: actual_duration,
-                    ts: chrono::Utc::now(),
-                };
+                let frame = Frame { data, dur, ts };
 
                 if let Err(e) = sender.0.try_send(frame) {
                     match e {
@@ -248,21 +191,4 @@ fn update_time_text(mut query: Query<&mut Text, With<TimeText>>, time: Res<Time>
     for mut text in query.iter_mut() {
         text.0 = format!("Time: {:.2} s", time.elapsed_secs());
     }
-}
-
-fn frame_limiter(mut timer: ResMut<FrameTimer>) {
-    let target_frame_time = Duration::from_secs_f64(1.0 / FPS as f64);
-    loop {
-        let elapsed = timer.0.elapsed();
-        if elapsed >= target_frame_time {
-            break;
-        }
-        let remaining = target_frame_time - elapsed;
-        if remaining > Duration::from_millis(2) {
-            std::thread::sleep(Duration::from_millis(1));
-        } else {
-            std::hint::spin_loop();
-        }
-    }
-    timer.0 = std::time::Instant::now();
 }
