@@ -56,11 +56,11 @@ pub fn arg_builder() -> Vec<String> {
         "-g", // Group of Pictures
         "10",
         "-b:v",     // 目标视频码率
-        "600k",     // 6000k
+        "6000k",    // 6000k
         "-maxrate", // 最大码率
-        "600k",
+        "6000k",
         "-bufsize", // 缓冲区大小
-        "1200k",    // 12000k
+        "12000k",   // 12000k
         "-f",       // 输出格式
         "h264",
         "pipe:1",
@@ -80,7 +80,7 @@ pub struct H264Encoder {
 impl H264Encoder {
     pub fn new(
         raw_rx: MAsyncRx<mpmc::Array<Frame>>,
-        encoded_tx: MAsyncTx<mpsc::Array<Frame>>,
+        encoded_tx: MAsyncTx<mpmc::Array<Frame>>,
     ) -> anyhow::Result<H264Encoder> {
         let mut child = Command::new("ffmpeg")
             .args(arg_builder())
@@ -96,7 +96,7 @@ impl H264Encoder {
 
         // let (raw_tx, raw_rx) = mpsc::channel::<RawFrame>(5);
 
-        let (pts_tx, pts_rx) = mpsc::bounded_async::<(Duration, DateTime<Utc>)>(30);
+        let (pts_tx, pts_rx) = mpmc::bounded_async::<(Duration, DateTime<Utc>)>(30);
 
         let cancel_token = CancellationToken::new();
 
@@ -136,9 +136,9 @@ impl H264Encoder {
         mut stdout: tokio::process::ChildStdout,
         mut stderr: tokio::process::ChildStderr,
         raw_rx: MAsyncRx<mpmc::Array<Frame>>,
-        pts_tx: MAsyncTx<mpsc::Array<(Duration, DateTime<Utc>)>>,
-        mut pts_rx: AsyncRx<mpsc::Array<(Duration, DateTime<Utc>)>>,
-        encoded_tx: MAsyncTx<mpsc::Array<Frame>>,
+        pts_tx: MAsyncTx<mpmc::Array<(Duration, DateTime<Utc>)>>,
+        mut pts_rx: MAsyncRx<mpmc::Array<(Duration, DateTime<Utc>)>>,
+        encoded_tx: MAsyncTx<mpmc::Array<Frame>>,
         cancel_token: CancellationToken,
     ) {
         let stderr_task = tokio::spawn(async move {
@@ -237,8 +237,8 @@ impl H264Encoder {
 
 async fn process_access_unit(
     au: h264_parser::AccessUnit,
-    pts_rx: &mut AsyncRx<mpsc::Array<(Duration, DateTime<Utc>)>>,
-    encoded_tx: &MAsyncTx<mpsc::Array<Frame>>,
+    pts_rx: &mut MAsyncRx<mpmc::Array<(Duration, DateTime<Utc>)>>,
+    encoded_tx: &MAsyncTx<mpmc::Array<Frame>>,
 ) {
     let mut frame_data = Vec::with_capacity(au.nals.iter().map(|n| n.ebsp.len() + 5).sum());
 

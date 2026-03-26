@@ -12,7 +12,7 @@ pub struct OpusEncoder {
 impl OpusEncoder {
     pub fn new(
         raw_rx: MAsyncRx<mpmc::Array<Frame>>,
-        encoded_tx: MAsyncTx<mpsc::Array<Frame>>,
+        encoded_tx: MAsyncTx<mpmc::Array<Frame>>,
     ) -> anyhow::Result<OpusEncoder> {
         let cancel_token = CancellationToken::new();
         tokio::spawn(Self::background(raw_rx, encoded_tx, cancel_token.clone()));
@@ -25,7 +25,7 @@ impl OpusEncoder {
 
     async fn background(
         raw_rx: MAsyncRx<mpmc::Array<Frame>>,
-        encoded_tx: MAsyncTx<mpsc::Array<Frame>>,
+        encoded_tx: MAsyncTx<mpmc::Array<Frame>>,
         cancel_token: CancellationToken,
     ) {
         let mut encoder = match Encoder::new(48000, Channels::Stereo, Application::Audio) {

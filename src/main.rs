@@ -23,14 +23,14 @@ async fn main() -> anyhow::Result<()> {
     app().await
 }
 
-async fn app() -> anyhow::Result<()> {
-    let (video_encoded_tx, video_encoded_rx) = mpsc::bounded_async::<Frame>(5);
-    let (audio_encoded_tx, audio_encoded_rx) = mpsc::bounded_async::<Frame>(50);
+// let whip_opt = WhipStreamerOpt {
+//     url: "https://stream.place".to_string(),
+//     token: "Bearer xxx".to_string(),
+// };
 
-    // let whip_opt = WhipStreamerOpt {
-    //     url: "https://stream.place".to_string(),
-    //     token: "Bearer z4Sj4XcsAw2uNuKwxQnGqWYkAebmCbaVjyCav9GR2zfwgwJ8ET7A3KmSusxvPF2GrKtLoiKzYHw7coCSQ2uYNZzYk".to_string(),
-    // };
+async fn app() -> anyhow::Result<()> {
+    let (video_encoded_tx, video_encoded_rx) = mpmc::bounded_async::<Frame>(5);
+    let (audio_encoded_tx, audio_encoded_rx) = mpmc::bounded_async::<Frame>(50);
 
     let whip_opt = WhipStreamerOpt {
         url: "http://127.0.0.1:8889/mystream/whip".to_string(),
@@ -49,7 +49,6 @@ async fn app() -> anyhow::Result<()> {
     tokio::spawn(async move {
         let mut interval = tokio::time::interval(std::time::Duration::from_millis(20));
         let silence_data = bytes::Bytes::from(vec![0u8; 3840]);
-        tracing::info!("静音测试发生器已启动");
         loop {
             interval.tick().await;
 
@@ -61,10 +60,10 @@ async fn app() -> anyhow::Result<()> {
             if let Err(e) = audio_raw_tx_async.try_send(frame) {
                 match e {
                     crossfire::TrySendError::Full(_) => {
-                        tracing::debug!("音频流拥堵，主动丢弃 20ms 静音");
+                        tracing::debug!("音频流拥堵");
                     }
                     crossfire::TrySendError::Disconnected(_) => {
-                        tracing::info!("音频输入管道已关闭，退出静音发生器");
+                        tracing::info!("音频输入管道已关闭");
                         break;
                     }
                 }
@@ -75,13 +74,10 @@ async fn app() -> anyhow::Result<()> {
     tokio::task::spawn_blocking(move || {
         bevy_render::bevy_app(video_raw_tx_blocking);
     });
-
     tokio::signal::ctrl_c().await?;
-
     audio_encoder.close();
     video_encoder.close();
     streamer.close();
     streamer.wait().await;
-
     Ok(())
 }
