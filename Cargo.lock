@@ -5757,7 +5757,8 @@ dependencies = [
  "reqwest",
  "rustls",
  "serde",
- "snafu",
+ "snafu 0.9.0",
+ "snafu-tracing",
  "thiserror 2.0.18",
  "tokio",
  "tokio-util",
@@ -6256,6 +6257,15 @@ dependencies = [
 
 [[package]]
 name = "snafu"
+version = "0.8.9"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "6e84b3f4eacbf3a1ce05eac6763b4d629d60cbc94d632e4092c54ade71f1e1a2"
+dependencies = [
+ "snafu-derive 0.8.9",
+]
+
+[[package]]
+name = "snafu"
 version = "0.9.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "d1d4bced6a69f90b2056c03dcff2c4737f98d6fb9e0853493996e1d253ca29c6"
@@ -6263,7 +6273,19 @@ dependencies = [
  "backtrace",
  "futures-core",
  "pin-project",
- "snafu-derive",
+ "snafu-derive 0.9.0",
+]
+
+[[package]]
+name = "snafu-derive"
+version = "0.8.9"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "c1c97747dbf44bb1ca44a561ece23508e99cb592e862f22222dcf42f51d1e451"
+dependencies = [
+ "heck",
+ "proc-macro2",
+ "quote",
+ "syn",
 ]
 
 [[package]]
@@ -6273,6 +6295,27 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "54254b8531cafa275c5e096f62d48c81435d1015405a91198ddb11e967301d40"
 dependencies = [
  "heck",
+ "proc-macro2",
+ "quote",
+ "syn",
+]
+
+[[package]]
+name = "snafu-tracing"
+version = "0.8.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "32f8f79974e299b0b524488ec5d1572e56f66041aa349303e039c7146ce9a708"
+dependencies = [
+ "snafu 0.8.9",
+ "snafu-tracing-macro",
+]
+
+[[package]]
+name = "snafu-tracing-macro"
+version = "0.8.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "a6cafe457504a7f66f37e49ea0a8a4d4ddcd29394621062d74c4f7578e2f7ab5"
+dependencies = [
  "proc-macro2",
  "quote",
  "syn",

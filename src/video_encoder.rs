@@ -5,12 +5,12 @@ use tokio::process::Command;
 
 use bytes::Bytes;
 use chrono::{DateTime, Utc};
+use crossfire::{AsyncRx, MAsyncRx, MAsyncTx, mpmc, mpsc};
 use std::time::Duration;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
-use tokio::sync::mpsc;
 use tokio_util::sync::CancellationToken;
 
-use crate::whip::MediaFrame;
+use crate::Frame;
 
 pub fn arg_builder() -> Vec<String> {
     let a = [
@@ -38,23 +38,23 @@ pub fn arg_builder() -> Vec<String> {
         // VA-API Constrained Baseline Profile
         "-profile:v",
         "578",
-        // B Frame
-        "-bf",
+        // "-c:v",
+        // "libx264",
+        // "-profile:v",
+        // "baseline",
+        // "-pix_fmt",
+        // "yuv420p",
+        "-bf", // B Frame
         "0",
-        // Group of Pictures
-        "-g",
-        "60",
-        // 目标视频码率
-        "-b:v",
+        "-g", // Group of Pictures
+        "10",
+        "-b:v", // 目标视频码率
         "6000k",
-        // 最大码率
-        "-maxrate",
+        "-maxrate", // 最大码率
         "6000k",
-        // 缓冲区大小
-        "-bufsize",
+        "-bufsize", // 缓冲区大小
         "12000k",
-        // 输出格式
-        "-f",
+        "-f", // 输出格式
         "h264",
         "pipe:1",
     ];
@@ -65,19 +65,16 @@ pub fn arg_builder() -> Vec<String> {
         .collect()
 }
 
-pub struct RawFrame {
-    pub data: Vec<u8>,
-    pub dur: Duration,
-    pub ts: DateTime<Utc>,
-}
-
 pub struct H264Encoder {
-    raw_tx: mpsc::Sender<RawFrame>,
+    // raw_tx: mpsc::Sender<RawFrame>,
     cancel_token: CancellationToken,
 }
 
 impl H264Encoder {
-    pub fn new(encoded_tx: mpsc::Sender<MediaFrame>) -> anyhow::Result<H264Encoder> {
+    pub fn new(
+        raw_rx: MAsyncRx<mpmc::Array<Frame>>,
+        encoded_tx: MAsyncTx<mpsc::Array<Frame>>,
+    ) -> anyhow::Result<H264Encoder> {
         let mut child = Command::new("ffmpeg")
             .args(arg_builder())
             .stdin(Stdio::piped())
@@ -90,9 +87,9 @@ impl H264Encoder {
         let ffmpeg_stdout = child.stdout.take().unwrap();
         let ffmpeg_stderr = child.stderr.take().unwrap();
 
-        let (raw_tx, raw_rx) = mpsc::channel::<RawFrame>(5);
+        // let (raw_tx, raw_rx) = mpsc::channel::<RawFrame>(5);
 
-        let (pts_tx, pts_rx) = mpsc::channel::<(Duration, DateTime<Utc>)>(30);
+        let (pts_tx, pts_rx) = mpsc::bounded_async::<(Duration, DateTime<Utc>)>(30);
 
         let cancel_token = CancellationToken::new();
 
@@ -109,18 +106,18 @@ impl H264Encoder {
         ));
 
         Ok(H264Encoder {
-            raw_tx,
+            // raw_tx,
             cancel_token,
         })
     }
 
-    pub fn push_frame(&self, frame: RawFrame) -> Result<(), &'static str> {
-        match self.raw_tx.try_send(frame) {
-            Ok(_) => Ok(()),
-            Err(mpsc::error::TrySendError::Full(_)) => Err("编码器队列满，主动丢弃原始帧"),
-            Err(mpsc::error::TrySendError::Closed(_)) => Err("编码器已关闭"),
-        }
-    }
+    // pub fn push_frame(&self, frame: RawFrame) -> Result<(), &'static str> {
+    //     match self.raw_tx.try_send(frame) {
+    //         Ok(_) => Ok(()),
+    //         Err(mpsc::error::TrySendError::Full(_)) => Err("编码器队列满，主动丢弃原始帧"),
+    //         Err(mpsc::error::TrySendError::Closed(_)) => Err("编码器已关闭"),
+    //     }
+    // }
 
     pub fn close(&self) {
         self.cancel_token.cancel();
@@ -131,30 +128,50 @@ impl H264Encoder {
         mut stdin: tokio::process::ChildStdin,
         mut stdout: tokio::process::ChildStdout,
         mut stderr: tokio::process::ChildStderr,
-        mut raw_rx: mpsc::Receiver<RawFrame>,
-        pts_tx: mpsc::Sender<(Duration, DateTime<Utc>)>,
-        mut pts_rx: mpsc::Receiver<(Duration, DateTime<Utc>)>,
-        encoded_tx: mpsc::Sender<MediaFrame>,
+        raw_rx: MAsyncRx<mpmc::Array<Frame>>,
+        pts_tx: MAsyncTx<mpsc::Array<(Duration, DateTime<Utc>)>>,
+        mut pts_rx: AsyncRx<mpsc::Array<(Duration, DateTime<Utc>)>>,
+        encoded_tx: MAsyncTx<mpsc::Array<Frame>>,
         cancel_token: CancellationToken,
     ) {
-        // let stderr_task = tokio::spawn(async move {
-        //     let mut reader = tokio::io::BufReader::new(stderr);
-        //     let mut line = String::new();
-        //     while let Ok(bytes) =
-        //         tokio::io::AsyncBufReadExt::read_line(&mut reader, &mut line).await
-        //     {
-        //         if bytes == 0 {
-        //             break;
-        //         }
-        //         // FFmpeg 的日志通常比较啰嗦，可以按需改成 debug 级别
-        //         tracing::debug!("FFmpeg: {}", line.trim_end());
-        //         line.clear();
-        //     }
-        // });
+        let stderr_task = tokio::spawn(async move {
+            let mut reader = tokio::io::BufReader::new(stderr);
+            let mut line = String::new();
+            while let Ok(bytes) =
+                tokio::io::AsyncBufReadExt::read_line(&mut reader, &mut line).await
+            {
+                if bytes == 0 {
+                    break;
+                }
+                tracing::info!("FFmpeg: {}", line.trim_end());
+                line.clear();
+            }
+        });
 
         let stdin_task = tokio::spawn(async move {
-            while let Some(frame) = raw_rx.recv().await {
-                if pts_tx.send((frame.dur, frame.ts)).await.is_err() {
+            let mut total_frames = 0;
+            let mut fps_counter = 0;
+            let mut last_time = std::time::Instant::now();
+
+            while let Ok(frame) = raw_rx.recv().await {
+                total_frames += 1;
+                fps_counter += 1;
+
+                let elapsed = last_time.elapsed();
+                if elapsed.as_secs_f32() >= 1.0 {
+                    let actual_fps = fps_counter as f32 / elapsed.as_secs_f32();
+                    tracing::info!(
+                        "H264Encoder input: Total Frames: {} | Size: ({:.2} MB) | Actual FPS: {:.2}",
+                        total_frames,
+                        (frame.data.len() as f64) / 1024.0 / 1024.0,
+                        actual_fps
+                    );
+                    fps_counter = 0;
+                    last_time = std::time::Instant::now();
+                }
+
+                if let Err(e) = pts_tx.send((frame.dur, frame.ts)).await {
+                    tracing::error!("failed to send pts: {}", e);
                     break;
                 }
                 if let Err(e) = stdin.write_all(&frame.data).await {
@@ -166,7 +183,7 @@ impl H264Encoder {
 
         let stdout_task = tokio::spawn(async move {
             let mut buf = vec![0u8; 1024 * 1024];
-            let mut parser = h264_parser::parser::AnnexBParser::new();
+            let mut parser = AnnexBParser::new();
 
             loop {
                 match stdout.read(&mut buf).await {
@@ -206,14 +223,14 @@ impl H264Encoder {
             tracing::info!("FFmpeg 进程已成功终止");
         }
 
-        // stderr_task.abort();
+        stderr_task.abort();
     }
 }
 
 async fn process_access_unit(
     au: h264_parser::AccessUnit,
-    pts_rx: &mut mpsc::Receiver<(std::time::Duration, chrono::DateTime<chrono::Utc>)>,
-    encoded_tx: &mpsc::Sender<MediaFrame>,
+    pts_rx: &mut AsyncRx<mpsc::Array<(Duration, DateTime<Utc>)>>,
+    encoded_tx: &MAsyncTx<mpsc::Array<Frame>>,
 ) {
     let mut frame_data = Vec::with_capacity(au.nals.iter().map(|n| n.ebsp.len() + 5).sum());
 
@@ -227,13 +244,13 @@ async fn process_access_unit(
         frame_data.extend_from_slice(&nal.ebsp);
     }
     let (dur, ts) = match pts_rx.recv().await {
-        Some(pts_info) => pts_info,
-        None => {
+        Ok(pts_info) => pts_info,
+        Err(_) => {
             tracing::error!("严重异常: 拿到一帧画面，但时间戳队列已经空了/关闭了！");
             return;
         }
     };
-    let media_frame = MediaFrame {
+    let media_frame = Frame {
         data: Bytes::from(frame_data),
         dur,
         ts,
@@ -243,6 +260,8 @@ async fn process_access_unit(
             "网络拥堵：Encoded 队列满，主动丢弃一个已编码帧 (类型: {:?})",
             au.kind
         );
+    } else {
+        // tracing::info!("Encoder: 输出帧 (类型: {:?})", au.kind);
     }
 }
 
