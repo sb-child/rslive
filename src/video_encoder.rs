@@ -1,7 +1,10 @@
 use std::process::Stdio;
 
 use h264_parser::AnnexBParser;
-use tokio::process::Command;
+use tokio::{
+    io::{AsyncBufRead, AsyncBufReadExt},
+    process::Command,
+};
 
 use bytes::Bytes;
 use chrono::{DateTime, Utc};
@@ -25,6 +28,10 @@ pub fn arg_builder() -> Vec<String> {
         "60",
         "-i",
         "pipe:0",
+        "-stats_period",
+        "1",
+        // "-progress",
+        // "pipe:2",
     ];
     let b = [
         "-vaapi_device",
@@ -48,13 +55,13 @@ pub fn arg_builder() -> Vec<String> {
         "0",
         "-g", // Group of Pictures
         "10",
-        "-b:v", // 目标视频码率
-        "6000k",
+        "-b:v",     // 目标视频码率
+        "600k",     // 6000k
         "-maxrate", // 最大码率
-        "6000k",
+        "600k",
         "-bufsize", // 缓冲区大小
-        "12000k",
-        "-f", // 输出格式
+        "1200k",    // 12000k
+        "-f",       // 输出格式
         "h264",
         "pipe:1",
     ];
@@ -137,13 +144,14 @@ impl H264Encoder {
         let stderr_task = tokio::spawn(async move {
             let mut reader = tokio::io::BufReader::new(stderr);
             let mut line = String::new();
-            while let Ok(bytes) =
-                tokio::io::AsyncBufReadExt::read_line(&mut reader, &mut line).await
-            {
+            while let Ok(bytes) = read_until_any_eol(&mut reader, &mut line).await {
                 if bytes == 0 {
                     break;
                 }
-                tracing::info!("FFmpeg: {}", line.trim_end());
+                let trimmed = line.trim_end();
+                if !trimmed.is_empty() {
+                    tracing::info!("FFmpeg: {}", trimmed);
+                }
                 line.clear();
             }
         });
@@ -268,5 +276,36 @@ async fn process_access_unit(
 impl Drop for H264Encoder {
     fn drop(&mut self) {
         self.close();
+    }
+}
+
+async fn read_until_any_eol<R: AsyncBufRead + Unpin>(
+    reader: &mut R,
+    buf: &mut String,
+) -> std::io::Result<usize> {
+    let mut read_bytes = 0;
+    loop {
+        let (done, used) = {
+            let available = reader.fill_buf().await?;
+            if available.is_empty() {
+                return Ok(read_bytes); // EOF
+            }
+            match available.iter().position(|&b| b == b'\r' || b == b'\n') {
+                Some(i) => {
+                    let chunk = &available[..=i];
+                    buf.push_str(&String::from_utf8_lossy(chunk));
+                    (true, i + 1)
+                }
+                None => {
+                    buf.push_str(&String::from_utf8_lossy(available));
+                    (false, available.len())
+                }
+            }
+        };
+        reader.consume(used);
+        read_bytes += used;
+        if done {
+            return Ok(read_bytes);
+        }
     }
 }

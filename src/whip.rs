@@ -16,6 +16,7 @@ use webrtc::{
     peer_connection::{
         RTCPeerConnection, configuration::RTCConfiguration,
         peer_connection_state::RTCPeerConnectionState,
+        policy::ice_transport_policy::RTCIceTransportPolicy,
         sdp::session_description::RTCSessionDescription,
     },
     rtp_transceiver::rtp_codec::RTCRtpCodecCapability,
@@ -279,7 +280,7 @@ impl WhipStreamer {
         let config = RTCConfiguration {
             ice_servers: vec![
                 RTCIceServer {
-                    urls: vec!["stun:stun.l.google.com:19302".to_owned()],
+                    urls: vec!["stun:stun.turnix.io:3478".to_owned()],
                     ..Default::default()
                 },
                 // RTCIceServer {
@@ -290,12 +291,21 @@ impl WhipStreamer {
                 //     urls: vec!["turn:turn01.hubl.in?transport=udp".to_owned()],
                 //     ..Default::default()
                 // },
-                // RTCIceServer {
-                //     urls: vec!["turn:freestun.net:3478".to_owned()],
-                //     credential: "free".to_owned(),
-                //     username: "free".to_owned(),
-                // },
+                RTCIceServer {
+                    urls: vec![
+                        "turn:eu-central.turnix.io:3478",
+                        // "turn:eu-central.turnix.io:3478?transport=tcp",
+                        "turns:eu-central.turnix.io:443",
+                        // "turns:eu-central.turnix.io:443?transport=tcp",
+                    ]
+                    .into_iter()
+                    .map(|x| x.to_owned())
+                    .collect::<Vec<String>>(),
+                    credential: "164d6cdaa92e8db8bbab4e4e8dd5c29c".to_owned(),
+                    username: "d1598133-7cad-4df1-8332-7fd8774905b8".to_owned(),
+                },
             ],
+            ice_transport_policy: RTCIceTransportPolicy::All,
             ..Default::default()
         };
         let peer_connection = Arc::new(
@@ -361,6 +371,8 @@ impl WhipStreamer {
         url: &String,
         token: &String,
     ) -> Result<(String, String), Error> {
+        // tracing::info!(">>> My SDP Offer:\n{}", sdp);
+
         let resp = http_client
             .post(url)
             .header("Authorization", token)
@@ -404,7 +416,7 @@ impl WhipStreamer {
 
         let answer_sdp = resp.text().context(HttpConnectionSnafu).await?;
 
-        // tracing::info!("answer_sdp: {answer_sdp}");
+        // tracing::info!("<<< Server SDP Answer:\n{}", answer_sdp);
 
         Ok((resource_url, answer_sdp))
     }

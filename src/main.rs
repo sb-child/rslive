@@ -25,15 +25,15 @@ async fn app() -> anyhow::Result<()> {
     let (video_encoded_tx, video_encoded_rx) = mpsc::bounded_async::<Frame>(5);
     let (audio_encoded_tx, audio_encoded_rx) = mpsc::bounded_async::<Frame>(50);
 
-    // let whip_opt = WhipStreamerOpt {
-    //     url: "https://stream.place".to_string(),
-    //     token: "Bearer xxx".to_string(),
-    // };
-
     let whip_opt = WhipStreamerOpt {
-        url: "http://127.0.0.1:8889/mystream/whip".to_string(),
-        token: "".to_string(),
+        url: "https://stream.place".to_string(),
+        token: "Bearer z4Sj4XcsAw2uNuKwxQnGqWYkAebmCbaVjyCav9GR2zfwgwJ8ET7A3KmSusxvPF2GrKtLoiKzYHw7coCSQ2uYNZzYk".to_string(),
     };
+
+    // let whip_opt = WhipStreamerOpt {
+    //     url: "http://127.0.0.1:8889/mystream/whip".to_string(),
+    //     token: "".to_string(),
+    // };
     let mut streamer = WhipStreamer::new(&whip_opt, video_encoded_rx, audio_encoded_rx);
 
     let (video_raw_tx_async, video_raw_rx_async) = mpmc::bounded_async::<Frame>(10);
