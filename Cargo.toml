@@ -37,6 +37,7 @@ snafu = { version = "0.9.0", features = ["backtrace", "futures"] }
 rustls = "0.23.37"
 wgpu = "29.0.0"
 snafu-tracing = "0.8.3"
+bytemuck = "1.25.0"
 
 [profile.dev.package."*"]
 opt-level = 1

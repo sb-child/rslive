@@ -5759,6 +5759,7 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "bevy",
+ "bytemuck",
  "bytes",
  "chrono",
  "crossfire",

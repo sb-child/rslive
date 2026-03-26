@@ -39,7 +39,6 @@ pub enum StreamState {
     Error(String),
 }
 pub struct WhipStreamer {
-    http_client: Client,
     state_rx: watch::Receiver<StreamState>,
     cancel_token: CancellationToken,
     // video_tx: mpsc::Sender<Frame>,
@@ -61,7 +60,7 @@ impl WhipStreamer {
         tokio::spawn(Self::background(
             opt.url.clone(),
             opt.token.clone(),
-            http_client.clone(),
+            http_client,
             state_tx,
             video_rx,
             audio_rx,
@@ -69,7 +68,6 @@ impl WhipStreamer {
         ));
 
         WhipStreamer {
-            http_client,
             state_rx,
             cancel_token,
             // video_tx,
@@ -127,7 +125,7 @@ impl WhipStreamer {
                 _ = cancel_token.cancelled() => {
                     tracing::info!("WHIP: 收到取消信号");
                     let _ = state_tx.send(StreamState::Disconnected);
-                    return ();
+                    return;
                 }
                 res = video_rx.recv() => {
                     match res {
@@ -135,29 +133,37 @@ impl WhipStreamer {
                         Err(_) => {
                             tracing::warn!("WHIP: 视频输入管道已关闭，退出流水线");
                             let _ = state_tx.send(StreamState::Disconnected);
-                            return ();
+                            return;
+                        }
+                    }
+                }
+            };
+            let first_audio_frame = tokio::select! {
+                _ = cancel_token.cancelled() => {
+                    tracing::info!("WHIP: 收到取消信号");
+                    let _ = state_tx.send(StreamState::Disconnected);
+                    return;
+                }
+                res = audio_rx.recv() => {
+                    match res {
+                        Ok(frame) => frame,
+                        Err(_) => {
+                            tracing::warn!("WHIP: 音频输入管道已关闭，退出流水线");
+                            let _ = state_tx.send(StreamState::Disconnected);
+                            return;
                         }
                     }
                 }
             };
 
             let setup_task = async {
-                let (
-                    peer_connection,
-                    video_track,
-                    // audio_track
-                ) = Self::create_webrtc().await?;
+                let (peer_connection, video_track, audio_track) = Self::create_webrtc().await?;
                 let local_desc = Self::create_sdp_offer(&peer_connection).await?;
                 let (resource_url, answer_sdp) =
                     Self::send_sdp_request(&http_client, &local_desc.sdp, &url, &token).await?;
                 Self::set_webrtc_remote(&peer_connection, &answer_sdp).await?;
 
-                Ok::<_, Error>((
-                    peer_connection,
-                    video_track,
-                    // audio_track,
-                    resource_url,
-                ))
+                Ok::<_, Error>((peer_connection, video_track, audio_track, resource_url))
             };
 
             let setup_result = tokio::select! {
@@ -169,12 +175,7 @@ impl WhipStreamer {
                 res = setup_task => res,
             };
 
-            let (
-                peer_connection,
-                video_track,
-                // audio_track
-                resource_url,
-            ) = match setup_result {
+            let (peer_connection, video_track, audio_track, resource_url) = match setup_result {
                 Ok(data) => data,
                 Err(e) => {
                     tracing::error!("连接建立失败: {e:#?} (准备第 {} 次重试)", retry_count + 1);
@@ -248,19 +249,19 @@ impl WhipStreamer {
                         // tracing::info!("写入视频帧完成...");
                     }
 
-                    // Ok(frame) = audio_rx.recv() => {
-                    //     let sample = webrtc::media::Sample {
-                    //         data: frame.data,
-                    //         duration: frame.dur,
-                    //         timestamp: std::time::SystemTime::from(frame.ts),
-                    //         ..Default::default()
-                    //     };
-                    //         // tracing::info!("写入音频帧...");
-                    //     if let Err(e) = audio_track.write_sample(&sample).await {
-                    //         tracing::error!("写入音频帧失败: {e}");
-                    //     }
-                    //     // tracing::info!("写入音频帧完成...");
-                    // }
+                    Ok(frame) = audio_rx.recv() => {
+                        let sample = webrtc::media::Sample {
+                            data: frame.data,
+                            duration: frame.dur,
+                            timestamp: std::time::SystemTime::from(frame.ts),
+                            ..Default::default()
+                        };
+                            // tracing::info!("写入音频帧...");
+                        if let Err(e) = audio_track.write_sample(&sample).await {
+                            tracing::error!("写入音频帧失败: {e}");
+                        }
+                        // tracing::info!("写入音频帧完成...");
+                    }
                 }
             }
         }
@@ -270,7 +271,7 @@ impl WhipStreamer {
         (
             Arc<RTCPeerConnection>,
             Arc<TrackLocalStaticSample>,
-            // Arc<TrackLocalStaticSample>,
+            Arc<TrackLocalStaticSample>,
         ),
         Error,
     > {
@@ -322,30 +323,27 @@ impl WhipStreamer {
             "rslive".to_owned(),
         ));
 
-        // let audio_track = Arc::new(TrackLocalStaticSample::new(
-        //     RTCRtpCodecCapability {
-        //         mime_type: "audio/opus".to_owned(),
-        //         clock_rate: 48000,
-        //         channels: 2,
-        //         ..Default::default()
-        //     },
-        //     "audio".to_owned(),
-        //     "rslive".to_owned(),
-        // ));
+        let audio_track = Arc::new(TrackLocalStaticSample::new(
+            RTCRtpCodecCapability {
+                mime_type: "audio/opus".to_owned(),
+                clock_rate: 48000,
+                channels: 2,
+                ..Default::default()
+            },
+            "audio".to_owned(),
+            "rslive".to_owned(),
+        ));
 
         peer_connection
             .add_track(Arc::clone(&video_track) as Arc<dyn TrackLocal + Send + Sync>)
             .context(UnhandledWebrtcSnafu)
             .await?;
-        // peer_connection
-        //     .add_track(Arc::clone(&audio_track) as Arc<dyn TrackLocal + Send + Sync>)
-        //     .context(UnhandledWebrtcSnafu)
-        //     .await?;
+        peer_connection
+            .add_track(Arc::clone(&audio_track) as Arc<dyn TrackLocal + Send + Sync>)
+            .context(UnhandledWebrtcSnafu)
+            .await?;
 
-        Ok((
-            peer_connection,
-            video_track, // , audio_track
-        ))
+        Ok((peer_connection, video_track, audio_track))
     }
 
     async fn create_sdp_offer(
