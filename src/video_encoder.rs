@@ -8,7 +8,7 @@ use tokio::{
 
 use bytes::Bytes;
 use chrono::{DateTime, Utc};
-use crossfire::{AsyncRx, MAsyncRx, MAsyncTx, mpmc, mpsc};
+use crossfire::{MAsyncRx, MAsyncTx, mpmc};
 use std::time::Duration;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio_util::sync::CancellationToken;
@@ -73,7 +73,6 @@ pub fn arg_builder() -> Vec<String> {
 }
 
 pub struct H264Encoder {
-    // raw_tx: mpsc::Sender<RawFrame>,
     cancel_token: CancellationToken,
 }
 
@@ -112,19 +111,8 @@ impl H264Encoder {
             cancel_token.clone(),
         ));
 
-        Ok(H264Encoder {
-            // raw_tx,
-            cancel_token,
-        })
+        Ok(H264Encoder { cancel_token })
     }
-
-    // pub fn push_frame(&self, frame: RawFrame) -> Result<(), &'static str> {
-    //     match self.raw_tx.try_send(frame) {
-    //         Ok(_) => Ok(()),
-    //         Err(mpsc::error::TrySendError::Full(_)) => Err("编码器队列满，主动丢弃原始帧"),
-    //         Err(mpsc::error::TrySendError::Closed(_)) => Err("编码器已关闭"),
-    //     }
-    // }
 
     pub fn close(&self) {
         self.cancel_token.cancel();
@@ -134,7 +122,7 @@ impl H264Encoder {
         mut child: tokio::process::Child,
         mut stdin: tokio::process::ChildStdin,
         mut stdout: tokio::process::ChildStdout,
-        mut stderr: tokio::process::ChildStderr,
+        stderr: tokio::process::ChildStderr,
         raw_rx: MAsyncRx<mpmc::Array<Frame>>,
         pts_tx: MAsyncTx<mpmc::Array<(Duration, DateTime<Utc>)>>,
         mut pts_rx: MAsyncRx<mpmc::Array<(Duration, DateTime<Utc>)>>,

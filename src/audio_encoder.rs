@@ -1,5 +1,5 @@
 use bytes::Bytes;
-use crossfire::{MAsyncRx, MAsyncTx, mpmc, mpsc};
+use crossfire::{MAsyncRx, MAsyncTx, mpmc};
 use opus::{Application, Channels, Encoder};
 use tokio_util::sync::CancellationToken;
 

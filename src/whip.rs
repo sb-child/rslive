@@ -1,10 +1,8 @@
 use std::{collections::HashMap, sync::Arc, time::Duration};
 
-use bytes::Bytes;
-use chrono::{DateTime, Utc};
-use crossfire::{AsyncRx, MAsyncRx, MAsyncTx, mpmc, mpsc};
+use crossfire::{MAsyncRx, mpmc};
 use reqwest::{Client, StatusCode};
-use snafu::{Report, ResultExt, prelude::*};
+use snafu::{ResultExt, prelude::*};
 use tokio::{
     sync::{mpsc as tokio_mpsc, watch},
     task::JoinHandle,
@@ -13,15 +11,10 @@ use tokio::{
 use tokio_util::sync::CancellationToken;
 use webrtc::{
     api::{APIBuilder, media_engine::MediaEngine},
-    ice_transport::ice_server::RTCIceServer,
     peer_connection::{
         RTCPeerConnection, configuration::RTCConfiguration,
         peer_connection_state::RTCPeerConnectionState,
-        policy::ice_transport_policy::RTCIceTransportPolicy,
         sdp::session_description::RTCSessionDescription,
-    },
-    rtcp::payload_feedbacks::{
-        full_intra_request::FullIntraRequest, picture_loss_indication::PictureLossIndication,
     },
     rtp_transceiver::{rtp_codec::RTCRtpCodecCapability, rtp_sender::RTCRtpSender},
     track::track_local::{TrackLocal, track_local_static_sample::TrackLocalStaticSample},
@@ -86,22 +79,6 @@ impl WhipStreamer {
             .await;
         self.bgh.abort();
     }
-
-    // pub async fn test_write_data(&mut self) {
-    //     let now = chrono::Utc::now();
-    //     let f1 = Frame {
-    //         data: Bytes::new(),
-    //         dur: Duration::from_secs(1),
-    //         ts: now,
-    //     };
-    //     let f2 = Frame {
-    //         data: Bytes::new(),
-    //         dur: Duration::from_secs(1),
-    //         ts: now,
-    //     };
-    //     self.audio_tx.send(f1).await.unwrap();
-    //     self.video_tx.send(f2).await.unwrap();
-    // }
 
     async fn background(
         url: String,
@@ -200,12 +177,12 @@ impl WhipStreamer {
 
                 async fn on_packet(
                     packets: Vec<Box<dyn webrtc::rtcp::packet::Packet + Send + Sync>>,
-                    attr: HashMap<usize, usize>,
+                    _attr: HashMap<usize, usize>,
                 ) {
                     for packet in packets {
                         // let any_packet = packet.as_any();
-                        let h = packet.header();
-                        tracing::warn!("WHIP: video_rtp_sender: {packet}");
+                        let _h = packet.header();
+                        tracing::info!("WHIP: video_rtp_sender: {packet}");
                     }
                 }
                 async fn on_error(e: webrtc::Error) -> bool {
@@ -340,34 +317,24 @@ impl WhipStreamer {
         me.register_default_codecs().context(UnhandledWebrtcSnafu)?;
         let api = APIBuilder::new().with_media_engine(me).build();
         let config = RTCConfiguration {
-            ice_servers: vec![
-                RTCIceServer {
-                    urls: vec!["stun:stun.turnix.io:3478".to_owned()],
-                    ..Default::default()
-                },
-                // RTCIceServer {
-                //     urls: vec!["turn:turn02.hubl.in?transport=tcp".to_owned()],
-                //     ..Default::default()
-                // },
-                // RTCIceServer {
-                //     urls: vec!["turn:turn01.hubl.in?transport=udp".to_owned()],
-                //     ..Default::default()
-                // },
-                RTCIceServer {
-                    urls: vec![
-                        "turn:eu-central.turnix.io:3478",
-                        // "turn:eu-central.turnix.io:3478?transport=tcp",
-                        "turns:eu-central.turnix.io:443",
-                        // "turns:eu-central.turnix.io:443?transport=tcp",
-                    ]
-                    .into_iter()
-                    .map(|x| x.to_owned())
-                    .collect::<Vec<String>>(),
-                    credential: "164d6cdaa92e8db8bbab4e4e8dd5c29c".to_owned(),
-                    username: "d1598133-7cad-4df1-8332-7fd8774905b8".to_owned(),
-                },
-            ],
-            ice_transport_policy: RTCIceTransportPolicy::All,
+            // ice_servers: vec![
+            //     RTCIceServer {
+            //         urls: vec!["stun:stun.turnix.io:3478".to_owned()],
+            //         ..Default::default()
+            //     },
+            //     RTCIceServer {
+            //         urls: vec![
+            //             "turn:eu-central.turnix.io:3478",
+            //             "turns:eu-central.turnix.io:443",
+            //         ]
+            //         .into_iter()
+            //         .map(|x| x.to_owned())
+            //         .collect::<Vec<String>>(),
+            //         credential: "".to_owned(),
+            //         username: "".to_owned(),
+            //     },
+            // ],
+            // ice_transport_policy: RTCIceTransportPolicy::All,
             ..Default::default()
         };
         let peer_connection = Arc::new(
@@ -430,7 +397,7 @@ impl WhipStreamer {
         url: &String,
         token: &String,
     ) -> Result<(String, String), Error> {
-        // tracing::info!(">>> My SDP Offer:\n{}", sdp);
+        // tracing::info!("SDP Offer:\n{}", sdp);
 
         let resp = http_client
             .post(url)
@@ -449,20 +416,6 @@ impl WhipStreamer {
             }
         );
 
-        // let response_type = resp
-        //     .headers()
-        //     .get(reqwest::header::CONTENT_TYPE)
-        //     .and_then(|h| h.to_str().ok())
-        //     .map(|s| s.to_string());
-
-        // ensure!(
-        //     response_type == Some("application/sdp".to_string()),
-        //     RequestSnafu {
-        //         status: resp.status(),
-        //         body: resp.text().context(HttpConnectionSnafu).await?
-        //     }
-        // );
-
         let resource_url = resp
             .headers()
             .get(reqwest::header::LOCATION)
@@ -475,7 +428,7 @@ impl WhipStreamer {
 
         let answer_sdp = resp.text().context(HttpConnectionSnafu).await?;
 
-        // tracing::info!("<<< Server SDP Answer:\n{}", answer_sdp);
+        // tracing::info!("SDP Answer:\n{}", answer_sdp);
 
         Ok((resource_url, answer_sdp))
     }
@@ -574,6 +527,7 @@ fn resolve_url(base_url: &str, location: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use bytes::Bytes;
     use tracing_subscriber::{EnvFilter, fmt, layer::SubscriberExt, util::SubscriberInitExt};
 
     #[test]

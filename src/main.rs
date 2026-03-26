@@ -1,6 +1,4 @@
-use bevy::{DefaultPlugins, app::PluginGroup};
-
-use crossfire::{mpmc, mpsc};
+use crossfire::mpmc;
 use rslive::{
     Frame,
     audio_encoder::OpusEncoder,
@@ -22,11 +20,6 @@ async fn main() -> anyhow::Result<()> {
         .init();
     app().await
 }
-
-// let whip_opt = WhipStreamerOpt {
-//     url: "https://stream.place".to_string(),
-//     token: "Bearer xxx".to_string(),
-// };
 
 async fn app() -> anyhow::Result<()> {
     let (video_encoded_tx, video_encoded_rx) = mpmc::bounded_async::<Frame>(5);
